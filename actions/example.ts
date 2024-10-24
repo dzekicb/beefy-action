@@ -4,17 +4,17 @@ import {
 } from '@tenderly/actions';
 import axios from "axios";
 
-
 export const beefyFn = async (context: Context, transactionEvent: TransactionEvent) => {
   const txHash = transactionEvent.hash;
   const txNetwork = transactionEvent.network;
+
+  const blockHash = transactionEvent.blockHash;
+  const blockNumber = transactionEvent.blockNumber;
 
   const WEBHOOK_URL = await context.secrets.get("WEBHOOK_URL");
   const BEARER = await context.secrets.get("BEARER");
   const ACCOUNT_SLUG = await context.secrets.get("ACCOUNT_SLUG");
   const PROJECT_SLUG = await context.secrets.get("PROJECT_SLUG");
-
-  // Get event name from environment variable
   const EVENT_NAME = await context.secrets.get("EVENT_NAME");
 
   if (!EVENT_NAME) {
@@ -30,20 +30,32 @@ export const beefyFn = async (context: Context, transactionEvent: TransactionEve
   });
 
   const traceData = traceResponse.data;
-  const logs = traceData.logs;
 
+  // Fetch contract name using your provided function
   const fetchContractName = async (addr: string) => {
     const contractEndpoint = `https://api.tenderly.co/api/v1/account/${ACCOUNT_SLUG}/project/${PROJECT_SLUG}/contract/${txNetwork}/${addr}`;
 
     try {
-      const contractResponse1 = await axios.get(contractEndpoint, {headers: {'Authorization': BEARER}});
-      return contractResponse1.data.contract.contract_name;
+      const contractResponse = await axios.get(contractEndpoint, {headers: {'Authorization': BEARER}});
+      return contractResponse.data.contract.contract_name;
     } catch (error) {
       console.error(`Error fetching contract name from endpoint for ${addr}:`, error);
     }
   };
 
-  // Extract unique addresses for specified event
+  const fetchContractAbi = async (addr: string) => {
+    const contractEndpoint = `https://api.tenderly.co/api/v1/account/${ACCOUNT_SLUG}/project/${PROJECT_SLUG}/contract/${txNetwork}/${addr}`;
+
+    try {
+      const contractResponse = await axios.get(contractEndpoint, {headers: {'Authorization': BEARER}});
+      return contractResponse.data.contract.data.abi;
+    } catch (error) {
+      console.error(`Error fetching contract ABI from endpoint for ${addr}:`, error);
+    }
+  };
+
+
+  // Extract detailed event information using the provided function for decoding logs
   const extractEventAddresses = (logs: any[]): string[] =>
     Array.from(new Set(
       logs
@@ -51,7 +63,6 @@ export const beefyFn = async (context: Context, transactionEvent: TransactionEve
         .map(log => log.raw.address)
     ));
 
-  // Extract detailed event information
   const extractEventDetails = (logs: any[]) => {
     return logs
       .filter(log => log.name === EVENT_NAME)
@@ -70,43 +81,48 @@ export const beefyFn = async (context: Context, transactionEvent: TransactionEve
       });
   };
 
-  // Get both addresses and event details
-  const addresses = extractEventAddresses(logs);
-  const eventDetails = extractEventDetails(logs);
-  const contractName = await fetchContractName(addresses[0]);
+  const eventAddresses = extractEventAddresses(traceData.logs);
+  const eventDetails = extractEventDetails(traceData.logs);
+  const contractName = await fetchContractName(eventAddresses[0]);
+  const contractAbi = await fetchContractAbi(eventAddresses[0]);
 
-  // Prepare data for webhook
-  const webhookData = {
+  // Extract transaction details
+  const sentinel = {
     contractName: contractName,
-    addresses,
-    events: eventDetails,
-    traceData
+    abi: contractAbi,
+  }
+
+  // Prepare data for the webhook
+  const webhookData = {
+    hash: txHash,
+    transaction: transactionEvent,
+    blockHash: blockHash,
+    blockNumber: blockNumber,
+    matchReasons: eventDetails,
+    sentinel: sentinel,
+    traceData: traceData.call_trace,
+    addresses: eventAddresses
   };
 
-  // Send to webhook
+  // Send the data to the webhook
   const sendToWebhook = async () => {
     try {
-      const response = await fetch(WEBHOOK_URL, {
-        method: 'POST',
+      const response = await axios.post(WEBHOOK_URL, webhookData, {
         headers: {
           'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(webhookData),
+          'Authorization': BEARER
+        }
       });
 
-      if (!response.ok) {
+      if (response.status !== 200) {
         throw new Error(`Failed to send data to webhook. Status: ${response.status}`);
       }
+
       console.log(`Successfully sent ${EVENT_NAME} data to the webhook`);
     } catch (error) {
       console.error('Error sending data to the webhook:', error);
     }
   };
-
-  // Log the data we're sending
-  console.log('Event Name:', EVENT_NAME);
-  console.log('Addresses:', addresses);
-  console.log('Event Details:', eventDetails);
 
   await sendToWebhook();
 };

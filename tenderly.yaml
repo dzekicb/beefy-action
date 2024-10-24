@@ -1,4 +1,4 @@
-account_id: "<ACCOUNT_SLUG>"
+account_id: ""
 actions:
   <ACCOUNT_SLUG>/<PROJECT_SLUG>:
     runtime: v2
@@ -34,4 +34,4 @@ actions:
                     address: 0x5B6C5363851EC9ED29CB7220C39B44E1dd443992
                   name: CallExecuted
         execution_type: parallel
-project_slug: "<PROJECT_SLUG>"
+project_slug: ""
